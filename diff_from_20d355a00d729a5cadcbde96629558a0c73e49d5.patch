@@ -1,0 +1,434 @@
+diff --git a/general/README.md b/general/README.md
+index fddfb3d..5ce3501 100644
+--- a/general/README.md
++++ b/general/README.md
+@@ -12,6 +12,7 @@
+ * -g : Number of groups (> 0, integer, default : 1)
+ * -v : Number of vertices added to the input graph (> 0, integer, default : 0)
+        With this option, the degree of the graph increases by one
++* -l : Minimum number of lines in each group (> 0, integer)
+ * -h : Output help
+ * -B : Use breadth-first search for APSP calculation
+ * -D : Estimate optimal maximum and minimum temperatures
+diff --git a/general/common.c b/general/common.c
+index be137d1..48feeff 100644
+--- a/general/common.c
++++ b/general/common.c
+@@ -159,11 +159,14 @@ bool check_duplicate_current_edge(const int lines, const int tmp_lines, const in
+   return flag;
+ }
+ 
++// Arguments for In-group channels added
++// by Kawano
+ bool edge_1g_opt(int (*edge)[2], const int nodes, const int lines, const int degree, const int based_nodes,
+ 		 const int based_lines, const int groups, const int start_line, const int added_centers,
+ 		 int* restrict adj, int *kind_opt, int* restrict restored_edge, int* restrict restored_line,
+ 		 int* restrict restored_adj_value, int* restrict restored_adj_idx_y,
+-		 int* restrict restored_adj_idx_x, const bool is_simple_graph, const int ii)
++		 int* restrict restored_adj_idx_x, const bool is_simple_graph, const int ii,
++		 const bool enable_lines_ingroup, int *lines_ingroup, const int min_lines_ingroup, int *restored_lines_ingroup)
+ {
+   if(groups == 1) // assert ?
+     return true;
+@@ -215,6 +218,21 @@ bool edge_1g_opt(int (*edge)[2], const int nodes, const int lines, const int deg
+   if(!check_duplicate_current_edge(lines, groups, tmp_line, edge, tmp_edge, groups, 1, (pattern == groups)))
+     return false;
+ 
++  // In-group channels checked
++  // by Kawano
++  int tmp_ing = 0;
++  if (enable_lines_ingroup) {
++	int before_ing = 0;
++	int after_ing = 0;
++	if (edge[tmp_line[0]][0] / based_nodes == edge[tmp_line[0]][1] / based_nodes)
++	  before_ing = 1;
++	if (tmp_edge[0][0] / based_nodes == tmp_edge[0][1] / based_nodes)
++	  after_ing = 1;
++	tmp_ing = *lines_ingroup - before_ing + after_ing;
++	if (tmp_ing < min_lines_ingroup)
++	  return false;
++  }
++
+   for(int i=0;i<groups;i++)
+     if(order(nodes, tmp_edge[i][0], tmp_edge[i][1], added_centers) == RIGHT)
+       swap(&tmp_edge[i][0], &tmp_edge[i][1]);  // RIGHT -> LEFT
+@@ -272,5 +290,11 @@ bool edge_1g_opt(int (*edge)[2], const int nodes, const int lines, const int deg
+ 
+   *kind_opt = D_1G_OPT;
+ 
++  // In-group channels restored
++  // by Kawano
++  if (enable_lines_ingroup) {
++	*restored_lines_ingroup = *lines_ingroup;
++	*lines_ingroup = tmp_ing;
++  }
+   return true;
+ }
+diff --git a/general/common.h b/general/common.h
+index 141ecd3..7d1e3a0 100644
+--- a/general/common.h
++++ b/general/common.h
+@@ -83,19 +83,25 @@ extern void print_adj(const int nodes, const int degree, const int adj[nodes][de
+ extern void print_edge(const int nodes, const int degree, const int edge[nodes*degree/2][2]);
+ extern void swap(int *a, int *b);
+ extern int order(int nodes, const int a, const int b, const int added_centers);
++// Arguments for in-group channels added
++// to sa, estimate_elapse_time, edge_1g_opt, edge_1g_opt
++// by Kawano
+ extern long long sa(const int nodes, const int lines, const int degree, const int groups,
+ 		    double temp, const long long ncalcs, const double cooling_rate, const int low_diam,
+ 		    const double low_ASPL, const bool hill_climbing_flag, const bool detect_temp_flag,
+ 		    double *max_diff_energy, int edge[lines][2], int *diameter, double *ASPL, const int cooling_cyclie,
+-		    const int added_centers, const int based_nodes, long long *num_accepts, const bool is_simple_graph, const int algo);
++		    const int added_centers, const int based_nodes, long long *num_accepts, const bool is_simple_graph, const int algo,
++		    const bool enable_lines_ingroup, int *lines_ingroup, const int min_lines_ingroup);
+ extern void check_current_edge(const int nodes, const int degree, const int lines, const int groups,
+ 			       const int based_nodes, int edge[lines][2], const double low_ASPL, const int added_centers, const int algo);
+ extern double estimate_elapse_time(const int nodes, const int based_nodes, const int lines, const int degree,
+-				   const int groups, int edge[lines][2], const int add_degree_to_center, const bool is_simple_graph, const int algo);
++				   const int groups, int edge[lines][2], const int add_degree_to_center, const bool is_simple_graph, const int algo,
++				   const bool enable_lines_ingroup, int *lines_ingroup, const int min_lines_ingroup);
+ extern bool edge_1g_opt(int (*edge)[2], const int nodes, const int lines, const int degree, const int based_nodes,
+ 			const int based_lines, const int groups, const int start_line, const int add_centers, int* restrict adj,
+ 			int *kind_opt, int* restrict restored_adj_edge, int* restrict restored_adj_line, int* restrict restored_adj_val,
+-			int* restrict restored_adj_idx_y, int* restrict restored_adj_idx_x, const bool is_simple_graph, const int ii);
++			int* restrict restored_adj_idx_y, int* restrict restored_adj_idx_x, const bool is_simple_graph, const int ii,
++			const bool enable_lines_ingroup, int *lines_ingroup, const int min_lines_ingroup, int* restored_lines_ingroup);
+ extern bool has_duplicated_edge(const int e00, const int e01, const int e10, const int e11);
+ extern bool check_loop(const int lines, int (*edge)[2]);
+ extern bool check_duplicate_tmp_edge(const int, const int lines, int (*edge)[2]);
+diff --git a/general/main.c b/general/main.c
+index f4ce2de..7b0611c 100644
+--- a/general/main.c
++++ b/general/main.c
+@@ -8,20 +8,21 @@ static void print_help(char *argv)
+ {
+   END("%s -f <edge_file> [-o <output_file>] [-s <random_seed>] \
+ [-n <num_calculations>] [-w <max_temperature>] [-c <min_temperature>] \
+-[-g <gruops>] [-v <add vertexes>] [-B] [-D] [-H] [-L] [-M] [-N] [-O] [-h]\n", argv);
++[-g <gruops>] [-v <add vertexes>] [-l <min_lines_ingroup>] [-B] [-D] [-H] [-L] [-M] [-N] [-O] [-h]\n", argv);
+ }
+ 
+ static void set_args(const int argc, char **argv, char *infname, char *outfname, bool *outfnameflag,
+ 		     int *random_seed, long long *ncalcs, double *max_temp, bool *max_temp_flag,
+ 		     double *min_temp, bool *min_temp_flag, bool *hill_climbing_flag,
+ 		     bool *detect_temp_flag, int *groups, int *added_centers, bool *halfway_flag,
+-		     bool *verify_flag, bool *enable_bfs, bool *enable_low_mem, bool *is_simple_graph)
++		     bool *verify_flag, bool *enable_bfs, bool *enable_low_mem, bool *is_simple_graph,
++		     bool *enable_lines_ingroup, int *lines_ingroup, int *min_lines_ingroup)
+ {
+   if(argc < 3)
+     print_help(argv[0]);
+ 
+   int result;
+-  while((result = getopt(argc,argv,"f:o:s:n:w:c:g:v:BDHLMNh"))!=-1){
++  while((result = getopt(argc,argv,"f:o:s:n:w:c:g:v:l:BDHLMNh"))!=-1){
+     switch(result){
+     case 'f':
+       if(strlen(optarg) > MAX_FILENAME_LENGTH)
+@@ -66,6 +67,12 @@ static void set_args(const int argc, char **argv, char *infname, char *outfname,
+       if(*added_centers <= 0)
+ 	ERROR("-v value > 0\n");
+       break;
++    case 'l':
++      *enable_lines_ingroup = true;
++      *min_lines_ingroup = atoi(optarg);
++      if(*min_lines_ingroup <= 0)
++	ERROR("-l value > 0\n");
++      break;
+     case 'B':
+       *enable_bfs = true;
+       break;
+@@ -174,7 +181,8 @@ static void create_symmetric_edge_with_vertexes(int (*edge)[2], const int based_
+ 
+ static void create_symmetric_edge(int (*edge)[2], const int based_nodes, const int based_lines,
+ 				  const int groups, const int degree, const int nodes,
+-				  const int lines, const bool is_simple_graph, const int algo)
++				  const int lines, const bool is_simple_graph, const int algo,
++				  const bool enable_lines_ingroup, int *lines_ingroup, const int min_lines_ingroup)
+ {
+   for(int j=1;j<groups;j++)
+     for(int i=0;i<based_lines;i++){
+@@ -188,13 +196,15 @@ static void create_symmetric_edge(int (*edge)[2], const int based_nodes, const i
+   int kind_opt;
+   int restored_adj_value[groups*4], restored_adj_idx_y[groups*4], restored_adj_idx_x[groups*4];
+   int restored_edge[groups*4], restored_line[groups*2];
++  int restored_lines_ingroup = 0;
+ 
+   create_adj(nodes, lines, degree, (const int (*)[2])edge, adj);
+   while(1){
+     int start_line = getRandom(lines);
+     edge_1g_opt(edge, nodes, lines, degree, based_nodes, based_lines, groups, start_line, 0,
+ 		(int *)adj, &kind_opt, restored_edge, restored_line, restored_adj_value,
+-		restored_adj_idx_y, restored_adj_idx_x, is_simple_graph, NOT_USED);
++		restored_adj_idx_y, restored_adj_idx_x, is_simple_graph, NOT_USED,
++		enable_lines_ingroup, lines_ingroup, min_lines_ingroup, &restored_lines_ingroup);
+     if(!is_simple_graph)
+       create_adj(nodes, lines, degree, (const int (*)[2])edge, adj);
+     if(evaluation(nodes, based_nodes, groups, lines, degree, (int *)adj, &diam, &ASPL, 0, algo))
+@@ -323,6 +333,10 @@ int main(int argc, char *argv[])
+   double max_temp = 100.0, min_temp = 0.217147, max_diff_energy = 0;
+   FILE *fp = NULL;
+ 
++  bool enable_lines_ingroup = false;
++  int lines_ingroup = 0;
++  int min_lines_ingroup = 0;
++  
+   MPI_Init(&argc, &argv);
+   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+   MPI_Comm_size(MPI_COMM_WORLD, &procs);
+@@ -336,7 +350,8 @@ int main(int argc, char *argv[])
+ 	   &max_temp, &max_temp_flag, &min_temp, &min_temp_flag,
+ 	   &hill_climbing_flag, &detect_temp_flag, &groups,
+ 	   &added_centers, &halfway_flag, &verify_flag, &enable_bfs,
+-	   &enable_low_mem, &is_simple_graph);
++	   &enable_low_mem, &is_simple_graph,
++	   &enable_lines_ingroup, &lines_ingroup, &min_lines_ingroup);
+ 
+   if(hill_climbing_flag && max_temp_flag)
+     ERROR("Both -H and -w cannot be used.\n");
+@@ -360,6 +375,11 @@ int main(int argc, char *argv[])
+   read_file(edge, infname);
+   int based_nodes = max_node_num(based_lines, (int *)edge) + 1;
+ 
++  lines_ingroup = based_lines;
++  if (enable_lines_ingroup && lines_ingroup <= min_lines_ingroup) {
++    ERROR("too large l. lines_ingroup <= min_lines_ingroup\n");
++  }
++
+   if(halfway_flag){
+     if(added_centers) based_nodes -= added_centers;
+     if(based_nodes%groups != 0)
+@@ -417,7 +437,8 @@ int main(int argc, char *argv[])
+ #endif
+ 
+   if(!halfway_flag && !added_centers)
+-    create_symmetric_edge(edge, based_nodes, based_lines, groups, degree, nodes, lines, is_simple_graph, algo);
++    create_symmetric_edge(edge, based_nodes, based_lines, groups, degree, nodes, lines, is_simple_graph, algo,
++			  enable_lines_ingroup, &lines_ingroup, min_lines_ingroup);
+     
+   if(verify_flag)
+     verfy_graph(nodes, based_nodes, degree, groups, lines, edge, added_centers);
+@@ -427,7 +448,8 @@ int main(int argc, char *argv[])
+     check_current_edge(nodes, degree, lines, groups, based_nodes, edge, low_ASPL, added_centers, algo);
+ 
+   double average_time = estimate_elapse_time(nodes, based_nodes, lines, degree, groups,
+-					     edge, added_centers, is_simple_graph, algo);
++					     edge, added_centers, is_simple_graph, algo,
++					     false, &lines_ingroup, min_lines_ingroup);
+ 
+   if(hill_climbing_flag){
+     max_temp = min_temp = 0.0;
+@@ -454,7 +476,8 @@ int main(int argc, char *argv[])
+   timer_start(TIMER_SA);
+   long long step = sa(nodes, lines, degree, groups, max_temp, ncalcs, cooling_rate, low_diam, low_ASPL,
+ 		      hill_climbing_flag, detect_temp_flag, &max_diff_energy, edge, &diam, &ASPL, 
+-		      cooling_cycle, added_centers, based_nodes, &num_accepts, is_simple_graph, algo);
++		      cooling_cycle, added_centers, based_nodes, &num_accepts, is_simple_graph, algo,
++		      enable_lines_ingroup, &lines_ingroup, min_lines_ingroup);
+   timer_stop(TIMER_SA);
+   
+   if(detect_temp_flag){
+diff --git a/general/sa.c b/general/sa.c
+index 899f554..887dc5f 100644
+--- a/general/sa.c
++++ b/general/sa.c
+@@ -46,16 +46,18 @@ static void print_result_header()
+ 
+ static void print_results(const long long num, const double temp, const double current_ASPL, 
+ 			  const double best_ASPL, const double low_ASPL, const int current_diam,
+-			  const int best_diam, const int low_diam, const long long accepts, const long long rejects)
++			  const int best_diam, const int low_diam, const long long accepts, const long long rejects,
++			  const int lines_ingroup, const int min_lines_ingroup)
+ {
+   PRINT_R0("%8lld\t%f\t", num, temp);
+   PRINT_R0("%f ( %f )\t%f ( %f )\t%d ( %d )\t\t\t%d ( %d )\t\t",
+ 	   current_ASPL, current_ASPL-low_ASPL, best_ASPL, best_ASPL-low_ASPL,
+ 	   current_diam, current_diam-low_diam, best_diam, best_diam-low_diam);
+   if(num != 0)
+-    PRINT_R0("%.4f ( %lld / %lld )\n", (double)accepts/(accepts+rejects), accepts, (accepts+rejects));
++    PRINT_R0("%.4f ( %lld / %lld ) ( %d / %d )\n", (double)accepts/(accepts+rejects), accepts, (accepts+rejects), lines_ingroup, min_lines_ingroup);
+   else
+-    PRINT_R0("-\n");
++    PRINT_R0(" ( %d / %d )\n", lines_ingroup, min_lines_ingroup);
++  //    PRINT_R0("-\n");
+ }  
+ 
+ void create_adj(const int nodes, const int lines, const int degree, 
+@@ -218,11 +220,15 @@ static void exchange_edge_2opt(const int nodes, const int lines, const int group
+ 			       const int based_nodes, int edge[lines][2], const int added_centers,
+ 			       int* restrict adj, int *kind_opt, int* restrict restored_edge, int* restrict restored_line,
+ 			       int* restrict restored_adj_value, int* restrict restored_adj_idx_y,
+-			       int* restrict restored_adj_idx_x, const bool is_simple_graph, const int ii)
++			       int* restrict restored_adj_idx_x, const bool is_simple_graph, const int ii,
++			       const bool enable_lines_ingroup, int *lines_ingroup, const int min_lines_ingroup, int* restored_lines_ingroup)
+ {
+   int tmp_line[groups*2], tmp_edge[groups*2][2], r;
+   int based_lines = lines / groups;
+ 
++  // kawano
++  int tmp_ing = 0;
++
+   while(1){
+     while(1){
+       while(1){
+@@ -236,7 +242,8 @@ static void exchange_edge_2opt(const int nodes, const int lines, const int group
+       else if((tmp_line[0] - tmp_line[1]) % based_lines == 0){
+ 	if(edge_1g_opt(edge, nodes, lines, degree, based_nodes, based_lines, groups, tmp_line[0], added_centers,
+ 		       adj, kind_opt, restored_edge, restored_line, restored_adj_value, restored_adj_idx_y,
+-		       restored_adj_idx_x, is_simple_graph, ii))
++		       restored_adj_idx_x, is_simple_graph, ii,
++		       enable_lines_ingroup, lines_ingroup, min_lines_ingroup, restored_lines_ingroup))
+ 	  return;
+ 	else
+ 	  continue;
+@@ -251,7 +258,8 @@ static void exchange_edge_2opt(const int nodes, const int lines, const int group
+     if(diameter_flag){
+       if(edge_1g_opt(edge, nodes, lines, degree, based_nodes, based_lines, groups, tmp_line[0], added_centers,
+ 		     adj, kind_opt, restored_edge, restored_line, restored_adj_value, restored_adj_idx_y,
+-		     restored_adj_idx_x, is_simple_graph, ii))
++		     restored_adj_idx_x, is_simple_graph, ii,
++		     enable_lines_ingroup, lines_ingroup, min_lines_ingroup, restored_lines_ingroup))
+ 	return;
+       else
+ 	continue;
+@@ -284,6 +292,26 @@ static void exchange_edge_2opt(const int nodes, const int lines, const int group
+       continue;
+     else if(!check_duplicate_current_edge(lines, groups*2, tmp_line, edge, tmp_edge, groups, 2, false))
+       continue;
++
++    // kawano
++    else if (enable_lines_ingroup) {
++
++      int before_ing = 0;
++      int after_ing = 0;
++      if (edge[tmp_line[0]][0] / based_nodes == edge[tmp_line[0]][1] / based_nodes)
++	before_ing += 1;
++      if (edge[tmp_line[1]][0] / based_nodes == edge[tmp_line[1]][1] / based_nodes)
++	before_ing += 1;
++      if (tmp_edge[0][0] / based_nodes == tmp_edge[0][1] / based_nodes)
++	after_ing += 1;
++      if (tmp_edge[1][0] / based_nodes == tmp_edge[1][1] / based_nodes)
++	after_ing += 1;
++      tmp_ing = *lines_ingroup - before_ing + after_ing;
++      if (tmp_ing < min_lines_ingroup)
++	continue;
++      else
++	break;
++    }
+     else
+       break;
+   } // end while
+@@ -366,6 +394,11 @@ static void exchange_edge_2opt(const int nodes, const int lines, const int group
+   }
+   
+   *kind_opt = D_2G_OPT;
++
++  if (enable_lines_ingroup) {
++    *restored_lines_ingroup = *lines_ingroup;
++    *lines_ingroup = tmp_ing;
++  }
+ }
+ 
+ static bool accept(const int new_diam, const int current_diam, const double new_ASPL, const double current_ASPL,
+@@ -414,8 +447,10 @@ long long sa(const int nodes, const int lines, const int degree, const int group
+ 	     const long long ncalcs, const double cooling_rate,  const int low_diam,  const double low_ASPL, 
+ 	     const bool hill_climbing_flag, const bool detect_temp_flag, double *max_diff_energy,
+ 	     int edge[lines][2], int *diam, double *ASPL, const int cooling_cycle, const int added_centers,
+-	     const int based_nodes, long long *total_accepts, const bool is_simple_graph, const int algo)
++	     const int based_nodes, long long *total_accepts, const bool is_simple_graph, const int algo,
++	     const bool enable_lines_ingroup, int *lines_ingroup, const int min_lines_ingroup)
+ {
++  PRINT_R0(" ( %d / %d )\n", *lines_ingroup, min_lines_ingroup);
+   long long ii, accepts = 0, rejects = 0;
+   int (*best_edge)[2]    = malloc(sizeof(int)*lines*2); // best_edge[lines][2]
+   int (*tmp_edge)[2]     = malloc(sizeof(int)*lines*2); // tmp_edge[lines][2]
+@@ -423,8 +458,11 @@ long long sa(const int nodes, const int lines, const int degree, const int group
+   int restored_adj_value[groups*4], restored_adj_idx_y[groups*4], restored_adj_idx_x[groups*4], kind_opt;
+   int restored_edge[groups*4], restored_line[groups*2];
+   bool restore_flag = false;
++  int tmp_lines_ingroup = 0;
++  int restored_lines_ingroup = 0;
+   copy_edge((int *)best_edge, (int *)edge, lines*2);
+   copy_edge((int *)tmp_edge,  (int *)edge, lines*2);
++  tmp_lines_ingroup = *lines_ingroup;
+ 
+   // Create adj matrix
+   int *adj = malloc(sizeof(int)*nodes*degree); // int adj[nodes][degree];
+@@ -444,7 +482,8 @@ long long sa(const int nodes, const int lines, const int degree, const int group
+     int tmp_diam;
+     if(ii % print_interval == 0 && !detect_temp_flag){
+       print_results(ii, temp, current_ASPL, best_ASPL, low_ASPL, 
+-		    current_diam, best_diam, low_diam, accepts, rejects);
++		    current_diam, best_diam, low_diam, accepts, rejects,
++		    tmp_lines_ingroup, min_lines_ingroup);
+       accepts = 0;
+       rejects = 0;
+     }
+@@ -454,6 +493,7 @@ long long sa(const int nodes, const int lines, const int degree, const int group
+ 	if(restore_flag){
+ 	  restore_adj(degree, groups, adj, kind_opt, restored_adj_value, restored_adj_idx_y, restored_adj_idx_x);
+ 	  restore_edge(groups, kind_opt, (int *)tmp_edge, restored_line, restored_edge);
++	  tmp_lines_ingroup = restored_lines_ingroup;
+ 	}
+       }
+       else{
+@@ -462,7 +502,8 @@ long long sa(const int nodes, const int lines, const int degree, const int group
+ 
+       exchange_edge_2opt(nodes, lines, groups, degree, based_nodes, tmp_edge, added_centers,
+ 			 adj, &kind_opt, restored_edge, restored_line, restored_adj_value,
+-      			 restored_adj_idx_y, restored_adj_idx_x, is_simple_graph, (int)ii);
++			 restored_adj_idx_y, restored_adj_idx_x, is_simple_graph, (int)ii,
++			 enable_lines_ingroup, &tmp_lines_ingroup, min_lines_ingroup, &restored_lines_ingroup);
+ 
+       if(!is_simple_graph)
+       	create_adj(nodes, lines, degree, (const int (*)[2])tmp_edge, (int (*)[degree])adj);
+@@ -498,7 +539,8 @@ long long sa(const int nodes, const int lines, const int degree, const int group
+       if(best_diam == current_diam && best_ASPL == low_ASPL){
+ 	if(!detect_temp_flag){
+ 	  print_results(ii, temp, current_ASPL, best_ASPL, low_ASPL, 
+-			current_diam, best_diam, low_diam, accepts, rejects);
++			current_diam, best_diam, low_diam, accepts, rejects,
++			tmp_lines_ingroup, min_lines_ingroup);
+ 	  PRINT_R0("---\nFound optimum solution.\n");
+ 	}
+ 	break;
+@@ -509,6 +551,10 @@ long long sa(const int nodes, const int lines, const int degree, const int group
+       temp *= cooling_rate;
+   }
+ 
++  // print # of in-group lines
++  // by kawano
++  printf(" ( %d / %d )\n", tmp_lines_ingroup, min_lines_ingroup);
++  
+   *ASPL = best_ASPL;
+   *diam = best_diam;
+   copy_edge((int *)edge, (int *)best_edge, lines*2);
+@@ -522,7 +568,8 @@ long long sa(const int nodes, const int lines, const int degree, const int group
+ #define ESTIMATED_TIMES 5
+ double estimate_elapse_time(const int nodes, const int based_nodes, const int lines, const int degree,
+ 			    const int groups, int edge[lines][2], const int added_centers,
+-			    const bool is_simple_graph, const int algo)
++			    const bool is_simple_graph, const int algo,
++			    const bool enable_lines_ingroup, int *lines_ingroup, const int min_lines_ingroup)
+ {
+   int diam;    // Not use
+   double ASPL; // Not use
+@@ -531,6 +578,7 @@ double estimate_elapse_time(const int nodes, const int based_nodes, const int li
+   int kind_opt;
+   int restored_adj_value[groups*4], restored_adj_idx_y[groups*4], restored_adj_idx_x[groups*4];
+   int restored_edge[groups*4], restored_line[groups*2];
++  int restored_lines_ingroup = 0;
+ 
+   copy_edge((int *)tmp_edge, (int *)edge, lines*2);
+   create_adj(nodes, lines, degree, (const int (*)[2])tmp_edge, (int (*)[degree])adj);
+@@ -539,7 +587,8 @@ double estimate_elapse_time(const int nodes, const int based_nodes, const int li
+   for(int i=0;i<ESTIMATED_TIMES;i++){
+     exchange_edge_2opt(nodes, lines, groups, degree, based_nodes, tmp_edge, added_centers, adj,
+ 		       &kind_opt, restored_edge, restored_line, restored_adj_value,
+-		       restored_adj_idx_y, restored_adj_idx_x, is_simple_graph, (int)i);
++		       restored_adj_idx_y, restored_adj_idx_x, is_simple_graph, (int)i,
++		       enable_lines_ingroup, lines_ingroup, min_lines_ingroup, &restored_lines_ingroup);
+     if(!is_simple_graph)
+       create_adj(nodes, lines, degree, (const int (*)[2])tmp_edge, (int (*)[degree])adj);
+     assert(check(nodes, based_nodes, lines, degree, groups, tmp_edge, added_centers, adj, (int)i));
