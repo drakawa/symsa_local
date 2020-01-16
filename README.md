@@ -5,7 +5,7 @@ This is a patch for https://github.com/mnakao/GraphGolf.git Revision 20d355a00d7
 # Added Option
 * -l : Minimum number of lines (links) in each group (> 0, integer)
 
-# Examples of execution
+# Example of execution
     $ mpirun -np 1 ./gg -f ./data/n16d4.random.edges -g 4 -l 16 -o n64d4g4l16.edges
     
 * min_links = n * d * $\sigma$ / 2
