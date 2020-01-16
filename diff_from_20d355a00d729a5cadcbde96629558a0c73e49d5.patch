@@ -139,7 +139,27 @@ index f4ce2de..7b0611c 100644
      case 'B':
        *enable_bfs = true;
        break;
-@@ -174,7 +181,8 @@ static void create_symmetric_edge_with_vertexes(int (*edge)[2], const int based_
+@@ -161,20 +168,21 @@ static void create_symmetric_edge_with_vertexes(int (*edge)[2], const int based_
+       edge[based_lines*j+i][1] = edge[i][1] + based_nodes * j;
+     }
+     for(int i=org_based_lines;i<org_based_lines+added_centers*added_edges_to_center;i++){
+-       edge[based_lines*j+i][0] = edge[i][0] + based_nodes * j;
+-       edge[based_lines*j+i][1] = edge[i][1];
++      edge[based_lines*j+i][0] = edge[i][0] + based_nodes * j;
++      edge[based_lines*j+i][1] = edge[i][1];
++    }
++    for(int i=org_based_lines+added_centers*added_edges_to_center;i<based_lines;i++){
++      edge[based_lines*j+i][0] = edge[i][0] + based_nodes * j;
++      int tmp = edge[i][1] + based_nodes * j;
++      edge[based_lines*j+i][1] = (tmp < org_nodes)? tmp : tmp - org_nodes;
+     }
+-     for(int i=org_based_lines+added_centers*added_edges_to_center;i<based_lines;i++){
+-       edge[based_lines*j+i][0] = edge[i][0] + based_nodes * j;
+-       int tmp = edge[i][1] + based_nodes * j;
+-       edge[based_lines*j+i][1] = (tmp < org_nodes)? tmp : tmp - org_nodes;
+-     }
+   }
+ }
  
  static void create_symmetric_edge(int (*edge)[2], const int based_nodes, const int based_lines,
  				  const int groups, const int degree, const int nodes,
@@ -166,17 +186,17 @@ index f4ce2de..7b0611c 100644
      if(!is_simple_graph)
        create_adj(nodes, lines, degree, (const int (*)[2])edge, adj);
      if(evaluation(nodes, based_nodes, groups, lines, degree, (int *)adj, &diam, &ASPL, 0, algo))
-@@ -323,6 +333,10 @@ int main(int argc, char *argv[])
+@@ -322,6 +332,10 @@ int main(int argc, char *argv[])
+   double ASPL = 0, low_ASPL = 0, cooling_rate = 0;
    double max_temp = 100.0, min_temp = 0.217147, max_diff_energy = 0;
    FILE *fp = NULL;
- 
++
 +  bool enable_lines_ingroup = false;
 +  int lines_ingroup = 0;
 +  int min_lines_ingroup = 0;
-+  
+   
    MPI_Init(&argc, &argv);
    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-   MPI_Comm_size(MPI_COMM_WORLD, &procs);
 @@ -336,7 +350,8 @@ int main(int argc, char *argv[])
  	   &max_temp, &max_temp_flag, &min_temp, &min_temp_flag,
  	   &hill_climbing_flag, &detect_temp_flag, &groups,
@@ -292,6 +312,15 @@ index 899f554..887dc5f 100644
  	return;
        else
  	continue;
+@@ -264,7 +272,7 @@ static void exchange_edge_2opt(const int nodes, const int lines, const int group
+       tmp_line[0+2*i] = (tmp0 >= lines)? tmp0 - lines : tmp0;
+       tmp_line[1+2*i] = (tmp1 >= lines)? tmp1 - lines : tmp1;
+     }
+-    
++
+     for(int i=0;i<groups*2;i++)
+       for(int j=0;j<2;j++)
+ 	tmp_edge[i][j] = edge[tmp_line[i]][j];
 @@ -284,6 +292,26 @@ static void exchange_edge_2opt(const int nodes, const int lines, const int group
        continue;
      else if(!check_duplicate_current_edge(lines, groups*2, tmp_line, edge, tmp_edge, groups, 2, false))
